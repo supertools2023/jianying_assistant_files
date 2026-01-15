@@ -2,18 +2,38 @@
 
 映映小助手支持通过 Python 编写插件来扩展功能。插件运行在独立的 Python 宿主进程中，通过 WebSocket 与 Flutter 主程序进行双向通信。
 
-## 1. 插件结构
+## 1. 目录结构与插件定义
 
-每个插件都是 `./plugins/` 目录下的一个子目录。一个标准的插件结构如下：
+映映小助手的插件系统位于项目的 `plugins/` 目录下。该目录包含公共 SDK 文件、共享依赖定义以及各个独立的插件子目录。
+
+### 1.1 核心目录结构
 
 ```text
-my_plugin/
-├── manifest.json    # 插件元数据（必须）
-└── main.py         # 插件入口代码（必须）
+plugins/
+├── sdk.py               # 插件 SDK 核心逻辑
+├── plugin_host.py       # 插件宿主程序（内部使用）
+├── requirements.txt      # 共享依赖定义（必须）
+├── my_plugin/           # 插件 A（子目录形式）
+│   ├── manifest.json    # 插件元数据（必须）
+│   └── main.py         # 插件入口代码（必须）
+└── another_plugin/      # 插件 B
+    ├── manifest.json
+    └── main.py
 ```
 
-### 1.1 manifest.json 示例
+### 1.2 共享依赖 (requirements.txt)
 
+位于 `plugins/requirements.txt` 的文件定义了所有插件共享的 Python 依赖包。当应用启动或用户强制重建环境时，系统会自动安装此文件中的所有依赖。
+
+**注意事项:**
+- 请将插件所需的第三方库（如 `requests`, `pandas` 等）添加到此文件中。
+- 所有插件共享同一个虚拟环境，请注意依赖版本冲突。
+
+### 1.3 插件定义 (manifest.json)
+
+每个插件子目录必须包含一个 `manifest.json` 文件。
+
+**示例:**
 ```json
 {
   "id": "my_plugin",
@@ -25,7 +45,7 @@ my_plugin/
 }
 ```
 
-### 1.2 main.py 结构
+### 1.4 插件入口 (main.py)
 
 插件必须提供一个 `setup(api)` 函数，这是插件加载时的入口。推荐使用异步函数 (`async def`) 来处理事件，以获得更好的响应性能。
 
@@ -44,6 +64,15 @@ def setup(api):
     @api.on("on_ui_action")
     async def on_action(params):
         if params.get("actionId") == "my_action":
+            # 获取当前选中的草稿列表（如果在草稿管理页面）
+            selected_drafts = params.get("selectedDrafts", [])
+            if selected_drafts:
+                api.log(f"选中了 {len(selected_drafts)} 个草稿")
+                for draft in selected_drafts:
+                    api.log(f"  - {draft['name']}: {draft['folderPath']}")
+            else:
+                api.log("未选中任何草稿")
+
             # 直接调用阻塞式 UI 接口（内部已处理同步等待）
             api.alert("你点击了按钮！")
             return {"status": "ok"}
@@ -59,6 +88,14 @@ def setup(api):
 - `api.log(message: str)`: 向主程序发送日志，显示在对应的插件日志窗口。
 - `api.on(event_name: str)`: 装饰器，用于监听主程序发送的事件。
   - `on_ui_action`: 当用户点击插件注册的按钮时触发。推荐使用 `async def`。
+    - `params` 参数包含：
+      - `actionId`: 触发的动作标识
+      - `selectedDrafts`: 当前选中的草稿列表（仅在草稿管理页面可用）
+        - 每个草稿对象包含：
+          - `name`: 草稿名称
+          - `path`: 草稿draft_content.json的路径
+          - `folderPath`: 草稿目录的路径
+          - `isEncrypted`: 是否加密
   - `on_configure`: 当用户点击"设置"图标时触发。
 - `api.on_teardown`: 装饰器，注册插件卸载时的回调函数（同步）。
 
@@ -305,6 +342,7 @@ api.register_ui_action(
   - **自定义图片**: 传入插件目录下的图片文件名（如 `icon.png`）。建议使用 40x40 像素的 PNG 图片。
 - `location` (str): 显示位置。
   - `"draft_action_bar"`: 草稿管理页。按钮会同时出现在顶部的 Header 和底部的"插件功能"菜单中。
+    - **重要**: 当按钮在草稿管理页被点击时，`on_ui_action` 的 `params` 参数会包含 `selectedDrafts` 字段，表示当前选中的草稿列表。
   - `"home_quick_actions"`: 首页快捷操作区。以大图标网格形式展示。
   - `"resource_hub_actions"`: 资源中心页。出现在顶部工具栏。
 
@@ -358,22 +396,30 @@ async def handle_action(params):
 
 ---
 
-## 6. 完整示例：高级配置表单插件
+## 6. 完整示例：草稿处理插件
 
-以下示例展示了一个功能完整的插件，演示了如何使用 `show_custom_form` 创建复杂的配置界面：
+以下示例展示了一个功能完整的插件，演示了如何使用 `show_custom_form` 创建复杂的配置界面，以及如何处理用户选中的草稿：
 
 ```python
 import time
 
 def setup(api):
     """插件入口函数"""
-    api.log("高级配置插件已加载")
+    api.log("草稿处理插件已加载")
 
-    # 注册设置按钮
+    # 注册设置按钮（添加到草稿管理页）
     api.register_ui_action(
         action_id="open_advanced_settings",
         label="高级设置",
         icon="settings",
+        location="draft_action_bar"
+    )
+
+    # 注册批量导出按钮（添加到草稿管理页）
+    api.register_ui_action(
+        action_id="batch_export",
+        label="批量导出",
+        icon="export",
         location="draft_action_bar"
     )
 
@@ -445,6 +491,49 @@ def setup(api):
                 # 用户点击了取消
                 api.log("用户取消了配置")
 
+        elif action_id == "batch_export":
+            # 获取当前选中的草稿列表
+            selected_drafts = params.get("selectedDrafts", [])
+
+            if not selected_drafts:
+                api.alert("请先选择要导出的草稿！")
+                return
+
+            # 确认导出
+            draft_names = [d['name'] for d in selected_drafts]
+            confirm_msg = f"确定要导出以下 {len(selected_drafts)} 个草稿吗？\n\n" + "\n".join(f"• {name}" for name in draft_names[:5])
+            if len(draft_names) > 5:
+                confirm_msg += f"\n... 还有 {len(draft_names) - 5} 个草稿"
+
+            if not api.confirm(confirm_msg, title="确认导出"):
+                api.log("用户取消了批量导出")
+                return
+
+            # 更新按钮状态
+            api.update_ui_action("batch_export", label="导出中...", icon="sync")
+
+            # 批量处理草稿
+            success_count = 0
+            for idx, draft in enumerate(selected_drafts, 1):
+                api.log(f"[{idx}/{len(selected_drafts)}] 正在处理: {draft['name']}")
+                try:
+                    # 读取草稿文件
+                    draft_content = api.read_draft_file("draft_content.json")
+
+                    # 这里可以添加实际的导出逻辑
+                    # 例如: export_to_file(draft_content, output_dir)
+
+                    success_count += 1
+                    api.show_notification(f"已处理: {draft['name']} ({idx}/{len(selected_drafts)})", type="info")
+                except Exception as e:
+                    api.log(f"处理草稿 {draft['name']} 时出错: {str(e)}")
+
+            # 恢复按钮状态
+            api.update_ui_action("batch_export", label="批量导出", icon="export")
+
+            # 显示结果
+            api.alert(f"批量导出完成！\n\n成功: {success_count}\n失败: {len(selected_drafts) - success_count}", title="导出结果")
+
         elif action_id == "test_connection":
             # 处理表单中的按钮点击（按钮点击不会关闭表单）
             api.show_notification("正在测试连接...", type="info")
@@ -482,3 +571,121 @@ def setup(api):
 - 所有带 `name` 字段的组件值都会包含在返回结果中
 - 使用 `label` 组件可以创建视觉分组，提升用户体验
 - 配合 `api.get_plugin_storage` 和 `api.set_plugin_storage` 实现配置持久化
+
+---
+
+## 7. 选中草稿信息（selectedDrafts）
+
+当插件的 UI 动作注册在草稿管理页（`location="draft_action_bar"`）时，用户点击按钮后，`on_ui_action` 事件的 `params` 参数中会包含 `selectedDrafts` 字段，表示当前选中的草稿列表。
+
+### 7.1 数据结构
+
+`selectedDrafts` 是一个列表，每个元素代表一个选中的草稿，包含以下字段：
+
+```python
+{
+    "name": "我的视频项目",          # 草稿名称
+    "path": "C:/JianyingPro/Drafts/1234567890/draft_content.json",
+    "folderPath": "C:/JianyingPro/Drafts/1234567890", # 草稿目录路径
+    "isEncrypted": true
+}
+```
+
+### 7.2 使用场景
+
+- **批量操作**: 对多个选中的草稿执行相同的操作（如批量导出、批量处理）
+- **上下文操作**: 根据用户选中的草稿提供相关功能
+- **信息展示**: 显示选中草稿的摘要信息
+
+### 7.3 注意事项
+
+1. **空列表处理**: 如果用户未选中任何草稿，`selectedDrafts` 会是空列表 `[]`，插件应相应地给出提示。
+
+2. **页面限制**: `selectedDrafts` 仅在草稿管理页（`draft_action_bar`）可用，在其他位置注册的按钮不会包含此字段。
+
+3. **异步处理**: 处理多个草稿时，建议使用异步方式并及时更新用户界面，避免阻塞主程序。
+
+### 7.4 示例代码
+
+```python
+import os
+import json
+
+@api.on("on_ui_action")
+async def handle_draft_action(params):
+    action_id = params.get("actionId")
+    selected_drafts = params.get("selectedDrafts", [])
+
+    if action_id == "show_draft_info":
+        if not selected_drafts:
+            api.alert("请先选择要查看的草稿！")
+            return
+
+        # 构建草稿信息摘要
+        info_lines = [f"共选中 {len(selected_drafts)} 个草稿：\n"]
+        for draft in selected_drafts:
+            from datetime import datetime
+            info_lines.append(f"\n• {draft['name']}")
+            info_lines.append(f"  路径: {draft['folderPath']}")
+
+        # 显示在自定义表单中（支持复制）
+        api.show_custom_form({
+            "title": "草稿信息",
+            "items": [
+                {
+                    "type": "label",
+                    "text": "".join(info_lines)
+                }
+            ]
+        })
+
+    elif action_id == "batch_analyze":
+        if not selected_drafts:
+            api.alert("请先选择要分析的草稿！")
+            return
+
+        # 更新按钮状态
+        api.update_ui_action("batch_analyze", label="分析中...", icon="sync")
+
+        results = []
+        for idx, draft in enumerate(selected_drafts, 1):
+            draft_folder = draft['folderPath']
+            api.log(f"正在分析草稿 {idx}/{len(selected_drafts)}: {draft['name']}")
+
+            try:
+                # 读取草稿内容进行分析（使用 folderPath）
+                file_path = os.path.join(draft_folder, "draft_content.json")
+                raw_content = api.read_draft_file(file_path)
+                draft_json = json.loads(raw_content)
+
+                # 这里可以添加实际的分析逻辑
+                # 例如: 分析轨道数量、素材数量等
+                track_count = len(draft_json.get("tracks", []))
+                duration_us = draft_json.get("duration", 0)
+                duration_sec = duration_us / 1000000  # 微秒转秒
+
+                analysis_result = {
+                    "name": draft['name'],
+                    "track_count": track_count,
+                    "duration": f"{int(duration_sec // 60):02d}:{int(duration_sec % 60):02d}"
+                }
+                results.append(analysis_result)
+
+                api.show_notification(f"已完成: {draft['name']} ({idx}/{len(selected_drafts)})", type="info")
+
+            except Exception as e:
+                api.log(f"分析草稿 {draft['name']} 时出错: {str(e)}")
+
+        # 恢复按钮状态
+        api.update_ui_action("batch_analyze", label="批量分析", icon="search")
+
+        # 显示分析结果
+        if results:
+            result_text = "\n".join(
+                f"{r['name']}: {r['track_count']} 轨道, 时长 {r['duration']}"
+                for r in results
+            )
+            api.alert(result_text, title="分析结果")
+        else:
+            api.alert("所有草稿分析失败，请查看日志了解详情。", title="分析结果")
+```
