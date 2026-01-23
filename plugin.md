@@ -41,7 +41,40 @@ plugins/
   "version": "1.0.0",
   "description": "这是一个演示插件",
   "author": "YourName",
-  "entry": "main.py"
+  "entry": "main.py",
+  "platforms": ["windows", "macos", "linux"]
+}
+```
+
+**字段说明:**
+| 字段 | 类型 | 必需 | 说明 |
+|------|------|------|------|
+| `id` | string | 推荐 | 插件唯一标识符。如果未指定，将使用文件夹名称作为 ID |
+| `name` | string | 必需 | 插件显示名称 |
+| `version` | string | 必需 | 插件版本号（建议遵循语义化版本规范） |
+| `description` | string | 必需 | 插件功能描述 |
+| `author` | string | 必需 | 插件作者 |
+| `entry` | string | 可选 | 插件入口文件名，默认为 `main.py` |
+| `platforms` | array | 可选 | 支持的操作系统平台列表，可选值：`windows`、`macos`、`linux`。如果未指定，则默认支持所有平台 |
+
+**平台支持示例:**
+```json
+// 仅支持 Windows
+{
+  "id": "windows_only_plugin",
+  "platforms": ["windows"]
+}
+
+// 支持多平台
+{
+  "id": "cross_platform_plugin",
+  "platforms": ["windows", "macos", "linux"]
+}
+
+// 支持所有平台（未声明 platforms 字段）
+{
+  "id": "universal_plugin"
+  // 不包含 platforms 字段，默认支持所有平台
 }
 ```
 
@@ -78,6 +111,35 @@ def setup(api):
             return {"status": "ok"}
 ```
 
+### 1.5 插件搜索路径
+
+插件系统按以下优先级顺序搜索插件：
+
+| 优先级 | 路径 | 说明 |
+|--------|------|------|
+| 1 | 用户插件目录 | 最高优先级，可覆盖预置插件 |
+| 2 | 预置插件目录 | App Bundle 内置插件 |
+| 3 | 开发插件目录 | 仅开发时使用（通过环境变量指定） |
+
+**各平台用户插件目录:**
+- **macOS**: `~/Library/Application Support/jianying_assistant/plugins`
+- **Windows**: `%APPDATA%\jianying_assistant\plugins`
+- **Linux**: `~/.local/share/jianying_assistant/plugins`
+
+**开发插件目录:**
+设置环境变量 `DEV_PLUGINS_PATH` 指定开发中的插件目录。
+
+```bash
+# macOS/Linux
+export DEV_PLUGINS_PATH="/path/to/dev/plugins"
+
+# Windows
+set DEV_PLUGINS_PATH=C:\path\to\dev\plugins
+```
+
+**搜索优先级示例:**
+如果用户插件目录和预置插件目录都存在 `my_plugin`，则用户插件目录的版本会被加载。
+
 ---
 
 ## 2. SDK 接口说明 (`api` 对象)
@@ -95,7 +157,7 @@ def setup(api):
           - `name`: 草稿名称
           - `path`: 草稿draft_content.json的路径
           - `folderPath`: 草稿目录的路径
-          - `isEncrypted`: 是否加密
+          - `isEncrypted`: 是否为新格式（已加密）
   - `on_configure`: 当用户点击"设置"图标时触发。
 - `api.on_teardown`: 装饰器，注册插件卸载时的回调函数（同步）。
 
@@ -225,10 +287,10 @@ async def handle_action(params):
 ### 2.5 剪映与草稿相关
 - `api.is_jianying_running() -> bool`: 检查剪映是否正在运行。
 - `api.get_current_draft_dir() -> str`: 获取当前选中的草稿目录路径。如果未选中草稿则返回空字符串。
-- `api.read_draft_file(path: str) -> str`: 读取草稿文件（自动处理加密）。
-  - `path`: 相对于草稿目录的文件路径（如 `"draft_content.json"`）。
+- `api.read_draft_file(path: str) -> str`: 读取草稿文件（自动处理格式解析）。
+  - `path`: 草稿文件的完整路径（如 `selectedDrafts` 中提供的 `path` 字段）。
 - `api.write_draft_file(path: str, content: str, encrypt: bool = True)`: 写入草稿文件。
-  - `encrypt`: 是否使用剪映的加密格式写入（默认为 `True`）。
+  - `encrypt`: 是否转为新格式（默认为 `True`）。`True`=新格式，`False`=旧格式。
 - `api.get_jianying_info() -> dict`: 获取剪映安装路径、版本等信息。
   - 返回示例：
     ```python
@@ -337,14 +399,138 @@ api.register_ui_action(
 **参数说明:**
 - `action_id` (str): 动作唯一标识，用于在 `on_ui_action` 事件中识别按钮点击。
 - `label` (str): 按钮显示的文本。
-- `icon` (str, 可选): 图标。
-  - **内置图标**: `magic`, `clean`, `check`, `export`, `sync`, `rocket`, `star`, `refresh`, `add`, `settings`, `download`, `upload`, `delete`, `edit`, `search` 等。
+- `icon` (str, 可选): 图标名称。支持以下两类：
+  - **内置图标**: 详见下方【可用图标列表】
   - **自定义图片**: 传入插件目录下的图片文件名（如 `icon.png`）。建议使用 40x40 像素的 PNG 图片。
 - `location` (str): 显示位置。
   - `"draft_action_bar"`: 草稿管理页。按钮会同时出现在顶部的 Header 和底部的"插件功能"菜单中。
     - **重要**: 当按钮在草稿管理页被点击时，`on_ui_action` 的 `params` 参数会包含 `selectedDrafts` 字段，表示当前选中的草稿列表。
   - `"home_quick_actions"`: 首页快捷操作区。以大图标网格形式展示。
   - `"resource_hub_actions"`: 资源中心页。出现在顶部工具栏。
+
+#### 可用图标列表
+
+**核心功能 & AI**
+- `magic` - 自动修复/魔法棒
+- `sparkles` - 闪烁特效
+- `auto` - 自动/AI
+- `robot` - 机器人
+- `rocket` - 火箭（启动）
+- `bolt` - 闪电（快速）
+- `science` - 科学实验
+
+**常用基础操作**
+- `add`, `plus` - 添加
+- `remove`, `minus` - 删除/减少
+- `edit` - 编辑
+- `delete`, `trash` - 删除
+- `search` - 搜索
+- `save` - 保存
+- `download` - 下载
+- `upload` - 上传
+- `copy` - 复制
+- `paste` - 粘贴
+- `cut` - 剪切
+- `link` - 链接
+- `share` - 分享
+- `refresh` - 刷新
+- `sync` - 同步
+- `clean` - 清理
+- `check` - 检查/验证
+- `done` - 完成
+- `close`, `cancel` - 关闭/取消
+
+**状态、安全 & 信息**
+- `info` - 信息
+- `help` - 帮助
+- `error` - 错误
+- `warning` - 警告
+- `star` - 星标
+- `favorite` - 收藏
+- `lock` - 锁定
+- `unlock` - 解锁
+- `block` - 阻止
+- `shield`, `security` - 安全
+- `key` - 密钥
+- `bug` - 错误报告
+- `history` - 历史
+- `timer` - 计时器
+- `visibility` - 可见
+- `visibility_off` - 隐藏
+
+**资源、媒体 & 创作**
+- `home` - 首页
+- `video` - 视频
+- `movie` - 电影
+- `image` - 图片
+- `photo` - 相册
+- `music` - 音乐
+- `audio` - 音频
+- `mic` - 麦克风
+- `text` - 文本
+- `font` - 字体
+- `subtitle` - 字幕
+- `folder` - 文件夹
+- `file` - 文件
+- `layers` - 图层
+- `palette` - 调色板
+- `brush` - 画笔
+- `crop` - 裁剪
+- `aspect_ratio` - 宽高比
+- `transform` - 变换
+
+**通讯 & 办公**
+- `mail` - 邮件
+- `chat` - 聊天
+- `comment` - 评论
+- `person` - 用户
+- `group` - 用户组
+- `notification` - 通知
+- `calendar` - 日历
+- `cloud` - 云
+- `attach` - 附件
+- `print` - 打印
+
+**工具 & 硬件**
+- `settings` - 设置
+- `tune` - 调整
+- `terminal` - 终端
+- `code` - 代码
+- `storage` - 存储
+- `desktop` - 桌面
+- `laptop` - 笔记本
+- `phone` - 手机
+- `mouse` - 鼠标
+
+**导航 & 箭头**
+- `arrow_up` - 向上箭头
+- `arrow_down` - 向下箭头
+- `arrow_left` - 向左箭头（返回）
+- `arrow_right` - 向右箭头（前进）
+- `chevron_up` - 向上折叠
+- `chevron_down` - 向下展开
+- `menu` - 菜单
+- `more` - 更多
+- `launch` - 打开外部链接
+
+**图标使用示例:**
+```python
+# 使用内置图标
+api.register_ui_action(
+    action_id="export_video",
+    label="导出视频",
+    icon="video",  # 使用视频图标
+    location="draft_action_bar"
+)
+
+# 使用自定义图片（放在插件目录下）
+api.register_ui_action(
+    action_id="custom_action",
+    label="自定义功能",
+    icon="my_custom_icon.png",  # 使用插件目录下的图片
+    location="draft_action_bar"
+)
+```
 
 ### 3.2 动态更新 UI 动作
 在插件运行过程中，可以动态更新已注册按钮的显示内容：
@@ -518,7 +704,9 @@ def setup(api):
                 api.log(f"[{idx}/{len(selected_drafts)}] 正在处理: {draft['name']}")
                 try:
                     # 读取草稿文件
-                    draft_content = api.read_draft_file("draft_content.json")
+                    import os
+                    content_path = os.path.join(draft['folderPath'], "draft_content.json")
+                    draft_content = api.read_draft_file(content_path)
 
                     # 这里可以添加实际的导出逻辑
                     # 例如: export_to_file(draft_content, output_dir)
@@ -582,13 +770,48 @@ def setup(api):
 
 `selectedDrafts` 是一个列表，每个元素代表一个选中的草稿，包含以下字段：
 
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `name` | string | 草稿名称 |
+| `path` | string | draft_content.json 的完整路径 |
+| `folderPath` | string | 草稿目录路径（不含文件名） |
+| `isEncrypted` | bool | 是否为新格式（已加密） |
+
+**示例:**
 ```python
 {
-    "name": "我的视频项目",          # 草稿名称
+    "name": "我的视频项目",
     "path": "C:/JianyingPro/Drafts/1234567890/draft_content.json",
-    "folderPath": "C:/JianyingPro/Drafts/1234567890", # 草稿目录路径
+    "folderPath": "C:/JianyingPro/Drafts/1234567890",
     "isEncrypted": true
 }
+```
+
+**重要说明:**
+- `api.read_draft_file()` 需要传入**完整文件路径**（使用 `selectedDrafts` 中的 `path` 字段）
+- 如果需要访问草稿目录下的其他文件，请使用 `folderPath` 构建完整路径
+- SDK 会自动处理新格式草稿的解析，无需关心 `isEncrypted` 字段
+
+**路径使用示例:**
+```python
+import os
+
+# 方法一：直接使用 draft['path']
+content = api.read_draft_file(draft['path'])
+
+# 方法二：使用 folderPath 构建完整路径（更灵活）
+content_path = os.path.join(draft['folderPath'], "draft_content.json")
+content = api.read_draft_file(content_path)
+
+# 访问草稿目录下的其他文件
+draft_folder = draft['folderPath']
+cover_path = os.path.join(draft_folder, "cover.jpg")
+if os.path.exists(cover_path):
+    # 处理封面图片
+    pass
+
+# 错误：不要传入相对路径
+# content = api.read_draft_file("draft_content.json")  # ❌ 错误
 ```
 
 ### 7.2 使用场景
@@ -653,9 +876,9 @@ async def handle_draft_action(params):
             api.log(f"正在分析草稿 {idx}/{len(selected_drafts)}: {draft['name']}")
 
             try:
-                # 读取草稿内容进行分析（使用 folderPath）
-                file_path = os.path.join(draft_folder, "draft_content.json")
-                raw_content = api.read_draft_file(file_path)
+                # 读取草稿内容进行分析
+                content_path = os.path.join(draft_folder, "draft_content.json")
+                raw_content = api.read_draft_file(content_path)
                 draft_json = json.loads(raw_content)
 
                 # 这里可以添加实际的分析逻辑
@@ -689,3 +912,254 @@ async def handle_draft_action(params):
         else:
             api.alert("所有草稿分析失败，请查看日志了解详情。", title="分析结果")
 ```
+
+---
+
+## 8. 错误处理最佳实践
+
+### 8.1 日志级别使用
+
+插件 SDK 提供统一的日志接口 `api.log()`，建议根据消息性质使用适当的日志级别：
+
+```python
+# 普通信息日志
+api.log("插件已加载")
+api.log(f"处理了 {count} 个文件")
+
+# 错误日志 - 使用 [ERROR] 前缀标识
+api.log(f"[ERROR] 读取文件失败: {file_path}")
+api.log(f"[ERROR] 操作失败: {str(e)}")
+
+# 警告日志 - 使用 [WARNING] 前缀标识
+api.log(f"[WARNING] 配置文件缺失，使用默认值")
+
+# 成功信息 - 使用 [SUCCESS] 前缀标识
+api.log(f"[SUCCESS] 操作完成！")
+```
+
+**日志前缀约定：**
+- `[ERROR]` - 错误信息，需要用户注意的问题
+- `[WARNING]` - 警告信息，可能影响功能但不会导致失败
+- `[SUCCESS]` - 成功信息，操作顺利完成
+- `[INFO]` - 普通信息（可选，默认就是 info 级别）
+- 无前缀 - 普通调试日志
+
+### 8.2 异常捕获与用户反馈
+
+推荐在关键操作处添加异常捕获，并向用户提供清晰的错误反馈：
+
+```python
+@api.on("on_ui_action")
+async def handle_action(params):
+    try:
+        # 执行可能失败的操作
+        result = risky_operation()
+        api.log(f"[SUCCESS] 操作完成")
+    except FileNotFoundError as e:
+        # 文件未找到错误
+        api.log(f"[ERROR] 文件未找到: {e.filename}")
+        api.alert(f"找不到文件：{e.filename}", title="文件错误")
+    except PermissionError as e:
+        # 权限错误
+        api.log(f"[ERROR] 权限不足: {str(e)}")
+        api.alert("没有权限访问该文件或目录", title="权限错误")
+    except Exception as e:
+        # 其他未预期的错误
+        api.log(f"[ERROR] 未知错误: {type(e).__name__}: {str(e)}")
+        api.alert(f"操作失败：{str(e)}", title="错误")
+```
+
+### 8.3 草稿操作错误处理
+
+当操作草稿文件时，特别需要注意格式解析、文件损坏等情况：
+
+```python
+@api.on("on_ui_action")
+async def handle_draft_action(params):
+    selected_drafts = params.get("selectedDrafts", [])
+
+    for draft in selected_drafts:
+        try:
+            # 读取草稿文件（自动处理格式解析）
+            import os
+            content_path = os.path.join(draft['folderPath'], "draft_content.json")
+            content = api.read_draft_file(content_path)
+            api.log(f"[SUCCESS] 成功读取: {draft['name']}")
+
+        except Exception as e:
+            # 判断错误类型
+            if "parse" in str(e).lower() or "decrypt" in str(e).lower():
+                error_msg = "草稿解析失败，文件可能已损坏"
+            elif "not found" in str(e).lower():
+                error_msg = "草稿文件不存在"
+            elif "permission" in str(e).lower():
+                error_msg = "没有权限访问该文件"
+            else:
+                error_msg = f"读取失败: {str(e)}"
+
+            # 记录错误并通知用户
+            api.log(f"[ERROR] {draft['name']}: {error_msg}")
+            api.show_notification(f"{draft['name']}: {error_msg}", type="error")
+```
+
+### 8.4 网络请求错误处理
+
+如果插件需要发起网络请求，建议添加完善的错误处理：
+
+```python
+import requests
+
+def fetch_remote_data(url):
+    try:
+        # 禁用代理以加快本地请求
+        response = requests.get(
+            url,
+            timeout=10,
+            proxies={'http': None, 'https': None}
+        )
+        response.raise_for_status()
+        return response.json()
+
+    except requests.Timeout:
+        api.log("[ERROR] 请求超时，请检查网络连接")
+        api.alert("请求超时，请稍后重试", title="网络错误")
+        return None
+
+    except requests.ConnectionError:
+        api.log("[ERROR] 网络连接失败")
+        api.alert("无法连接到服务器", title="网络错误")
+        return None
+
+    except requests.HTTPError as e:
+        api.log(f"[ERROR] HTTP错误: {e.response.status_code}")
+        if e.response.status_code == 404:
+            api.alert("请求的资源不存在", title="错误")
+        elif e.response.status_code == 500:
+            api.alert("服务器错误，请稍后重试", title="错误")
+        else:
+            api.alert(f"请求失败: {e.response.status_code}", title="错误")
+        return None
+
+    except Exception as e:
+        api.log(f"[ERROR] 未知错误: {str(e)}")
+        return None
+```
+
+### 8.5 用户输入验证
+
+在处理用户输入时，应该提前验证并提供友好的错误提示：
+
+```python
+def validate_user_input(input_data):
+    """验证用户输入并返回错误信息（如果有）"""
+    if not input_data:
+        return "输入不能为空"
+
+    if len(input_data) > 1000:
+        return "输入内容过长（最大1000字符）"
+
+    # 检查是否包含非法字符
+    if any(char in input_data for char in ['<', '>', '"', "'"]):
+        return "输入包含非法字符"
+
+    return None  # 验证通过
+
+@api.on("on_ui_action")
+async def handle_input(params):
+    user_input = params.get("input", "")
+
+    # 提前验证
+    error = validate_user_input(user_input)
+    if error:
+        api.log(f"[WARNING] 用户输入验证失败: {error}")
+        api.alert(error, title="输入错误")
+        return
+
+    # 验证通过，继续处理
+    try:
+        result = process_input(user_input)
+        api.log(f"[SUCCESS] 处理完成")
+    except Exception as e:
+        api.log(f"[ERROR] 处理失败: {str(e)}")
+        api.alert(f"处理失败: {str(e)}", title="错误")
+```
+
+### 8.6 错误恢复建议
+
+对于可恢复的错误，建议提供重试机制：
+
+```python
+def retry_operation(operation, max_retries=3):
+    """带重试机制的操作执行"""
+    for attempt in range(1, max_retries + 1):
+        try:
+            return operation()
+        except Exception as e:
+            api.log(f"[WARNING] 第 {attempt} 次尝试失败: {str(e)}")
+
+            if attempt >= max_retries:
+                api.log(f"[ERROR] 所有重试均失败")
+                raise
+
+            # 等待后重试
+            import time
+            time.sleep(2 ** attempt)  # 指数退避
+
+# 使用示例
+try:
+    result = retry_operation(lambda: fetch_remote_data(url))
+    api.log("[SUCCESS] 操作成功")
+except Exception as e:
+    api.alert(f"操作失败，已重试 {max_retries} 次", title="错误")
+```
+
+---
+
+## 9. API 快速参考
+
+### 9.1 日志与调试
+| 方法 | 说明 |
+|------|------|
+| `api.log(message)` | 记录日志，支持前缀：`[ERROR]`, `[WARNING]`, `[SUCCESS]` |
+| `api.show_log_dialog(clear=False)` | 显示日志对话框 |
+
+### 9.2 交互反馈
+| 方法 | 说明 |
+|------|------|
+| `api.alert(content, title)` | 警告对话框 |
+| `api.confirm(content, title) -> bool` | 确认对话框 |
+| `api.prompt(content, title, default_value, ...) -> str` | 输入对话框 |
+| `api.show_notification(content, title, type)` | 系统通知 |
+| `api.show_custom_form(config) -> dict` | 自定义表单对话框 |
+
+### 9.3 草稿操作
+| 方法 | 说明 |
+|------|------|
+| `api.read_draft_file(path) -> str` | 读取草稿文件（自动解析格式） |
+| `api.write_draft_file(path, content, encrypt)` | 写入草稿文件（encrypt=true为新格式） |
+| `api.get_current_draft_dir() -> str` | 获取当前草稿目录 |
+
+### 9.4 系统与文件
+| 方法 | 说明 |
+|------|------|
+| `api.select_file(title, extensions) -> str` | 文件选择器 |
+| `api.select_directory(title) -> str` | 目录选择器 |
+| `api.get_clipboard() -> str` | 获取剪贴板 |
+| `api.set_clipboard(content)` | 设置剪贴板 |
+
+### 9.5 配置与存储
+| 方法 | 说明 |
+|------|------|
+| `api.get_app_config() -> dict` | 获取应用配置 |
+| `api.get_plugin_storage(key) -> Any` | 获取插件存储数据 |
+| `api.set_plugin_storage(key, value)` | 设置插件存储数据 |
+| `api.get_plugin_info(plugin_id) -> dict` | 获取插件信息 |
+
+### 9.6 UI 操作
+| 方法 | 说明 |
+|------|------|
+| `api.register_ui_action(action_id, label, icon, location)` | 注册 UI 动作 |
+| `api.update_ui_action(action_id, label, icon)` | 更新 UI 动作 |
+| `api.navigate_to(target)` | 导航到指定页面 |
+
+---
