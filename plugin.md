@@ -155,7 +155,7 @@ set DEV_PLUGINS_PATH=C:\path\to\dev\plugins
       - `selectedDrafts`: 当前选中的草稿列表（仅在草稿管理页面可用）
         - 每个草稿对象包含：
           - `name`: 草稿名称
-          - `path`: 草稿draft_content.json的路径
+          - `path`: 草稿 JSON 文件的完整路径（可能是 draft_content.json 或 draft_info.json）
           - `folderPath`: 草稿目录的路径
           - `isEncrypted`: 是否为新格式（已加密）
   - `on_configure`: 当用户点击"设置"图标时触发。
@@ -703,10 +703,20 @@ def setup(api):
             for idx, draft in enumerate(selected_drafts, 1):
                 api.log(f"[{idx}/{len(selected_drafts)}] 正在处理: {draft['name']}")
                 try:
-                    # 读取草稿文件
-                    import os
-                    content_path = os.path.join(draft['folderPath'], "draft_content.json")
-                    draft_content = api.read_draft_file(content_path)
+                    # 使用辅助函数查找草稿文件
+                    def get_draft_json_file(folder_path):
+                        for filename in ["draft_content.json", "draft_info.json"]:
+                            candidate = os.path.join(folder_path, filename)
+                            if os.path.exists(candidate):
+                                return candidate
+                        return None
+
+                    draft_file = get_draft_json_file(draft['folderPath'])
+                    if not draft_file:
+                        api.log(f"跳过: 找不到草稿文件")
+                        continue
+
+                    draft_content = api.read_draft_file(draft_file)
 
                     # 这里可以添加实际的导出逻辑
                     # 例如: export_to_file(draft_content, output_dir)
@@ -773,7 +783,7 @@ def setup(api):
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `name` | string | 草稿名称 |
-| `path` | string | draft_content.json 的完整路径 |
+| `path` | string | 草稿 JSON 文件的完整路径（可能是 draft_content.json 或 draft_info.json） |
 | `folderPath` | string | 草稿目录路径（不含文件名） |
 | `isEncrypted` | bool | 是否为新格式（已加密） |
 
@@ -781,7 +791,7 @@ def setup(api):
 ```python
 {
     "name": "我的视频项目",
-    "path": "C:/JianyingPro/Drafts/1234567890/draft_content.json",
+    "path": "C:/JianyingPro/Drafts/1234567890/draft_content.json",  # 可能是 draft_content.json 或 draft_info.json
     "folderPath": "C:/JianyingPro/Drafts/1234567890",
     "isEncrypted": true
 }
@@ -792,20 +802,40 @@ def setup(api):
 - 如果需要访问草稿目录下的其他文件，请使用 `folderPath` 构建完整路径
 - SDK 会自动处理新格式草稿的解析，无需关心 `isEncrypted` 字段
 
+**草稿文件说明:**
+剪映草稿目录中可能包含以下 JSON 文件：
+- `draft_content.json` - 主要的草稿内容文件（优先级最高）
+- `draft_info.json` - 备选的草稿信息文件
+- `draft_meta_info.json` - 元数据文件（通常不需要处理）
+
+插件开发时，建议使用统一的辅助函数来获取草稿文件路径。
+
 **路径使用示例:**
 ```python
 import os
 
-# 方法一：直接使用 draft['path']
-content = api.read_draft_file(draft['path'])
+# 推荐方式：使用辅助函数获取草稿文件路径
+def get_draft_json_file(folder_path):
+    """获取草稿的主 JSON 文件路径（优先 draft_content.json，其次 draft_info.json）"""
+    for filename in ["draft_content.json", "draft_info.json"]:
+        candidate = os.path.join(folder_path, filename)
+        if os.path.exists(candidate):
+            return candidate
+    return None
 
-# 方法二：使用 folderPath 构建完整路径（更灵活）
-content_path = os.path.join(draft['folderPath'], "draft_content.json")
-content = api.read_draft_file(content_path)
+# 使用辅助函数
+draft_file = get_draft_json_file(draft['folderPath'])
+if draft_file:
+    content = api.read_draft_file(draft_file)
+else:
+    api.log(f"找不到草稿文件: {draft['name']}")
+
+# 方法一：直接使用 draft['path']（最简单）
+content = api.read_draft_file(draft['path'])
 
 # 访问草稿目录下的其他文件
 draft_folder = draft['folderPath']
-cover_path = os.path.join(draft_folder, "cover.jpg")
+cover_path = os.path.join(draft_folder, "draft_cover.jpg")
 if os.path.exists(cover_path):
     # 处理封面图片
     pass
@@ -876,9 +906,20 @@ async def handle_draft_action(params):
             api.log(f"正在分析草稿 {idx}/{len(selected_drafts)}: {draft['name']}")
 
             try:
-                # 读取草稿内容进行分析
-                content_path = os.path.join(draft_folder, "draft_content.json")
-                raw_content = api.read_draft_file(content_path)
+                # 使用辅助函数查找草稿文件
+                def get_draft_json_file(folder_path):
+                    for filename in ["draft_content.json", "draft_info.json"]:
+                        candidate = os.path.join(folder_path, filename)
+                        if os.path.exists(candidate):
+                            return candidate
+                    return None
+
+                draft_file = get_draft_json_file(draft_folder)
+                if not draft_file:
+                    api.log(f"跳过: 找不到草稿文件")
+                    continue
+
+                raw_content = api.read_draft_file(draft_file)
                 draft_json = json.loads(raw_content)
 
                 # 这里可以添加实际的分析逻辑
@@ -980,10 +1021,23 @@ async def handle_draft_action(params):
 
     for draft in selected_drafts:
         try:
-            # 读取草稿文件（自动处理格式解析）
+            # 读取草稿文件（使用辅助函数查找）
             import os
-            content_path = os.path.join(draft['folderPath'], "draft_content.json")
-            content = api.read_draft_file(content_path)
+
+            def get_draft_json_file(folder_path):
+                """获取草稿的主 JSON 文件路径"""
+                for filename in ["draft_content.json", "draft_info.json"]:
+                    candidate = os.path.join(folder_path, filename)
+                    if os.path.exists(candidate):
+                        return candidate
+                return None
+
+            draft_file = get_draft_json_file(draft['folderPath'])
+            if not draft_file:
+                api.log(f"[SKIP] 找不到草稿文件: {draft['name']}")
+                continue
+
+            content = api.read_draft_file(draft_file)
             api.log(f"[SUCCESS] 成功读取: {draft['name']}")
 
         except Exception as e:
